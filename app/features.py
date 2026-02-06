@@ -17,4 +17,3 @@ def build_reel_features(df):
     }).reset_index()
 
     return reel_features
-
