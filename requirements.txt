@@ -1,1 +1,17 @@
+# Core ML
+torch
+torchvision
+torchaudio
+
+# Data processing
+pandas
+numpy
+scikit-learn
+
+# ANN Search
 faiss-cpu
+
+# Utilities
+tqdm
+joblib
+
