@@ -54,3 +54,18 @@ class RankingDataset(Dataset):
             "reel_id": torch.tensor(self.reels[idx]),
             "label": torch.tensor(self.labels[idx], dtype=torch.float),
         }
+
+from sklearn.model_selection import train_test_split
+
+
+def split_interactions(interactions_path, test_size=0.2, random_state=42):
+    df = pd.read_csv(interactions_path)
+
+    train_df, val_df = train_test_split(
+        df,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=df["user_id"]  # keeps user distribution balanced
+    )
+
+    return train_df, val_df
