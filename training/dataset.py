@@ -5,8 +5,8 @@ import numpy as np
 
 
 class TwoTowerDataset(Dataset):
-    def __init__(self, interactions_path):
-        self.df = pd.read_csv(interactions_path)
+    def __init__(self, df):
+        self.df = df
 
         self.users = self.df["user_id"].values
         self.reels = self.df["reel_id"].values
