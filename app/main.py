@@ -3,11 +3,18 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 
 from app.inference import RecommendationService
+from app.schemas import (
+    ErrorResponse,
+    HealthResponse,
+    RecommendResponse,
+    ReloadResponse,
+    RootResponse,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +31,20 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Reels Recommendation Service", lifespan=lifespan)
+app = FastAPI(
+    title="Reels Recommendation Service",
+    description=(
+        "Production-ready Reels recommendation API backed by a Two-Tower retriever, "
+        "FAISS ANN index, and neural ranker."
+    ),
+    version="1.0.0",
+    lifespan=lifespan,
+    openapi_tags=[
+        {"name": "System", "description": "Service health and metadata endpoints"},
+        {"name": "Recommendation", "description": "User recommendation endpoints"},
+        {"name": "ModelOps", "description": "Model/index lifecycle operations"},
+    ],
+)
 
 
 @app.middleware("http")
@@ -50,8 +70,15 @@ def _service(request: Request) -> RecommendationService:
     return service
 
 
-@app.get("/")
-def root(request: Request) -> Dict[str, Any]:
+@app.get(
+    "/",
+    response_model=RootResponse,
+    tags=["System"],
+    summary="Service metadata",
+    description="Returns API metadata and currently available routes.",
+    responses={503: {"model": ErrorResponse, "description": "Service not initialized"}},
+)
+def root(request: Request) -> RootResponse:
     service = _service(request)
     return {
         "service": "reels-recommendation-api",
@@ -67,8 +94,15 @@ def root(request: Request) -> Dict[str, Any]:
     }
 
 
-@app.get("/health")
-def health(request: Request) -> Dict[str, Any]:
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["System"],
+    summary="Health check",
+    description="Returns service status and loaded artifact counts.",
+    responses={503: {"model": ErrorResponse, "description": "Service not initialized"}},
+)
+def health(request: Request) -> HealthResponse:
     service = _service(request)
     return {
         "status": "ok",
@@ -77,12 +111,38 @@ def health(request: Request) -> Dict[str, Any]:
     }
 
 
-@app.get("/recommend")
+@app.get(
+    "/recommend",
+    response_model=RecommendResponse,
+    tags=["Recommendation"],
+    summary="Get top reel recommendations",
+    description=(
+        "Returns top-K recommendations for a user. Unknown users automatically use "
+        "cold-start popular fallback."
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid recommendation request"},
+        422: {"model": ErrorResponse, "description": "Query parameter validation error"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+        503: {"model": ErrorResponse, "description": "Service unavailable"},
+    },
+)
 def recommend(
     request: Request,
-    user_id: int = Query(..., ge=1),
-    top_k: int = Query(10, ge=1, le=100),
-) -> Dict[str, Any]:
+    user_id: int = Query(
+        ...,
+        ge=1,
+        description="User identifier to generate recommendations for",
+        example=123,
+    ),
+    top_k: int = Query(
+        10,
+        ge=1,
+        le=100,
+        description="Number of recommendations to return",
+        example=10,
+    ),
+) -> RecommendResponse:
     service = _service(request)
 
     try:
@@ -98,8 +158,15 @@ def recommend(
         raise HTTPException(status_code=500, detail="internal server error") from exc
 
 
-@app.post("/reload-models")
-def reload_models(request: Request) -> Dict[str, str]:
+@app.post(
+    "/reload-models",
+    response_model=ReloadResponse,
+    tags=["ModelOps"],
+    summary="Reload models and index",
+    description="Reloads Two-Tower model, ranker model, and FAISS index without restarting the server.",
+    responses={500: {"model": ErrorResponse, "description": "Reload failed"}},
+)
+def reload_models(request: Request) -> ReloadResponse:
     service = _service(request)
 
     try:
