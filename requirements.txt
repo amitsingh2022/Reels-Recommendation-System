@@ -10,6 +10,7 @@ faiss-cpu>=1.8.0
 # Serving
 fastapi>=0.111.0,<1
 uvicorn[standard]>=0.30.0,<1
+prometheus-client>=0.20.0,<1
 
 # Utilities / testing
 tqdm>=4.66.0,<5

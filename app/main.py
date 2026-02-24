@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
 from app.inference import RecommendationService
 from app.schemas import (
@@ -21,6 +24,22 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 LOGGER = logging.getLogger("reels-api")
+RELOAD_API_KEY_ENV = "MODEL_ADMIN_API_KEY"
+
+REQUEST_COUNT = Counter(
+    "reels_api_requests_total",
+    "Total number of HTTP requests",
+    ["method", "path", "status_code"],
+)
+REQUEST_LATENCY = Histogram(
+    "reels_api_request_latency_seconds",
+    "Request latency in seconds",
+    ["method", "path"],
+)
+COLD_START_COUNT = Counter(
+    "reels_api_cold_start_recommendations_total",
+    "Count of recommendation responses served from cold-start fallback",
+)
 
 
 @asynccontextmanager
@@ -49,17 +68,32 @@ app = FastAPI(
 
 @app.middleware("http")
 async def latency_logging_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request.state.request_id = request_id
     start = time.perf_counter()
+    response = None
     try:
         response = await call_next(request)
     finally:
         duration_ms = (time.perf_counter() - start) * 1000
+        status_code = response.status_code if response is not None else 500
+        REQUEST_COUNT.labels(
+            method=request.method,
+            path=request.url.path,
+            status_code=str(status_code),
+        ).inc()
+        REQUEST_LATENCY.labels(method=request.method, path=request.url.path).observe(
+            duration_ms / 1000.0
+        )
         LOGGER.info(
-            "request path=%s method=%s latency_ms=%.2f",
+            "request_id=%s path=%s method=%s status_code=%s latency_ms=%.2f",
+            request_id,
             request.url.path,
             request.method,
+            status_code,
             duration_ms,
         )
+    response.headers["X-Request-ID"] = request_id
     return response
 
 
@@ -88,6 +122,7 @@ def root(request: Request) -> RootResponse:
         "routes": [
             "GET /",
             "GET /health",
+            "GET /metrics",
             "GET /recommend?user_id=<id>&top_k=10",
             "POST /reload-models",
         ],
@@ -109,6 +144,16 @@ def health(request: Request) -> HealthResponse:
         "users_loaded": len(service.known_users),
         "reels_indexed": service.reel_count,
     }
+
+
+@app.get(
+    "/metrics",
+    tags=["System"],
+    summary="Prometheus metrics",
+    description="Exposes service metrics in Prometheus text format.",
+)
+def metrics() -> Response:
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get(
@@ -146,7 +191,10 @@ def recommend(
     service = _service(request)
 
     try:
-        return service.recommend(user_id=user_id, top_k=top_k)
+        result = service.recommend(user_id=user_id, top_k=top_k)
+        if result.get("is_cold_start"):
+            COLD_START_COUNT.inc()
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -163,11 +211,36 @@ def recommend(
     response_model=ReloadResponse,
     tags=["ModelOps"],
     summary="Reload models and index",
-    description="Reloads Two-Tower model, ranker model, and FAISS index without restarting the server.",
-    responses={500: {"model": ErrorResponse, "description": "Reload failed"}},
+    description=(
+        "Reloads Two-Tower model, ranker model, and FAISS index without restarting the "
+        "server. Requires `X-API-Key` header matching `MODEL_ADMIN_API_KEY`."
+    ),
+    responses={
+        401: {"model": ErrorResponse, "description": "Unauthorized"},
+        500: {"model": ErrorResponse, "description": "Reload failed"},
+        503: {"model": ErrorResponse, "description": "Reload disabled / service unavailable"},
+    },
 )
-def reload_models(request: Request) -> ReloadResponse:
+def reload_models(
+    request: Request,
+    x_api_key: str | None = Header(
+        default=None,
+        alias="X-API-Key",
+        description="Admin API key for model reload operations",
+    ),
+) -> ReloadResponse:
     service = _service(request)
+    configured_api_key = os.getenv(RELOAD_API_KEY_ENV)
+
+    if not configured_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"reload endpoint disabled: set {RELOAD_API_KEY_ENV} environment variable"
+            ),
+        )
+    if x_api_key != configured_api_key:
+        raise HTTPException(status_code=401, detail="unauthorized")
 
     try:
         service.reload()

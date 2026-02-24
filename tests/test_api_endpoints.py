@@ -59,6 +59,7 @@ def test_root_endpoint(client: TestClient):
     data = response.json()
     assert data["service"] == "reels-recommendation-api"
     assert "GET /health" in data["routes"]
+    assert "X-Request-ID" in response.headers
 
 
 def test_health_endpoint(client: TestClient):
@@ -66,6 +67,7 @@ def test_health_endpoint(client: TestClient):
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert "X-Request-ID" in response.headers
 
 
 def test_recommend_endpoint_for_known_user(client: TestClient):
@@ -86,17 +88,42 @@ def test_recommend_endpoint_for_cold_start_user(client: TestClient):
     assert data["recommendations"][0]["source"] == "popular_fallback"
 
 
+def test_request_id_is_echoed_when_provided(client: TestClient):
+    response = client.get("/health", headers={"X-Request-ID": "req-123"})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "req-123"
+
+
 def test_recommend_endpoint_query_validation(client: TestClient):
     response = client.get("/recommend", params={"user_id": 0, "top_k": 10})
 
     assert response.status_code == 422
 
 
-def test_reload_models_endpoint(client: TestClient):
-    response = client.post("/reload-models")
+def test_metrics_endpoint(client: TestClient):
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "reels_api_requests_total" in response.text
+
+
+def test_reload_models_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MODEL_ADMIN_API_KEY", "secret")
+    response = client.post("/reload-models", headers={"X-API-Key": "secret"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_reload_models_unauthorized(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MODEL_ADMIN_API_KEY", "secret")
+    response = client.post("/reload-models", headers={"X-API-Key": "wrong"})
+    assert response.status_code == 401
+
+
+def test_reload_models_disabled_without_config(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("MODEL_ADMIN_API_KEY", raising=False)
+    response = client.post("/reload-models", headers={"X-API-Key": "secret"})
+    assert response.status_code == 503
 
 
 def test_reload_models_wrong_method_not_allowed(client: TestClient):
