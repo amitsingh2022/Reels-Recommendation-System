@@ -219,3 +219,9 @@ docker run --rm -p 8000:8000 \
 - A/B testing hooks and business-rule re-ranking.
 - Vector index persistence/versioning policy.
 - CI pipeline for lint, type checks, tests, and container smoke tests.
+
+## 👨‍💻 Author  
+
+**Amit Singh**  
+Machine Learning Engineer | Data Enthusiast  
+🌐 [LinkedIn](https://www.linkedin.com/in/amit-singh101/) | [GitHub](https://github.com/amitsingh2022)
