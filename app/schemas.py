@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import Dict, List, Literal
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,16 @@ class HealthResponse(BaseModel):
     reels_indexed: int
 
 
+class LiveResponse(BaseModel):
+    status: Literal["alive"]
+    service: str
+
+
+class ReadyResponse(BaseModel):
+    status: Literal["ready", "not_ready"]
+    reason: str | None = None
+
+
 class RootResponse(BaseModel):
     service: str
     status: Literal["ok"]
@@ -40,6 +50,11 @@ class RootResponse(BaseModel):
 class ReloadResponse(BaseModel):
     status: Literal["ok"]
     message: str
+
+
+class ModelMetadataResponse(BaseModel):
+    status: Literal["ok"]
+    metadata: Dict[str, object]
 
 
 class ErrorResponse(BaseModel):

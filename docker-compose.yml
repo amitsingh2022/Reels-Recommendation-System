@@ -1,0 +1,22 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: reels-recommendation:latest
+    environment:
+      MODEL_ADMIN_API_KEY: change-me
+      SERVICE_NAME: reels-recommendation-api
+      ENVIRONMENT: prod
+      LOG_LEVEL: INFO
+      ENABLE_RELOAD_ENDPOINT: "true"
+      RATE_LIMIT_REQUESTS_PER_MINUTE: "120"
+      REQUEST_CACHE_TTL_SECONDS: "30"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

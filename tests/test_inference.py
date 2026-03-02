@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+from app.config import Settings
 from app.inference import RecommendationService
 
 
@@ -17,7 +18,6 @@ class _FakeTwoTower:
 
 class _FakeRanker:
     def __call__(self, user_emb: torch.Tensor, reel_emb: torch.Tensor) -> torch.Tensor:
-        # Higher reel id -> higher score.
         return reel_emb[:, 0]
 
 
@@ -29,7 +29,12 @@ class _FakeRetriever:
 
 
 def _build_service() -> RecommendationService:
-    svc = RecommendationService()
+    settings = Settings(
+        request_cache_ttl_seconds=60,
+        request_cache_max_items=100,
+        enable_reload_endpoint=False,
+    )
+    svc = RecommendationService(settings=settings)
     svc.two_tower = _FakeTwoTower()
     svc.ranker = _FakeRanker()
     svc.retriever = _FakeRetriever()
@@ -53,3 +58,10 @@ def test_ranked_recommendations_for_known_user():
 
     assert result["is_cold_start"] is False
     assert [row["reel_id"] for row in result["recommendations"]] == [7, 4, 2]
+
+
+def test_recommendations_cache_hit_returns_same_payload():
+    svc = _build_service()
+    first = svc.recommend(user_id=123, top_k=3)
+    second = svc.recommend(user_id=123, top_k=3)
+    assert first == second

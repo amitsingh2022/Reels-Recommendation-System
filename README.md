@@ -1,138 +1,121 @@
 # Reels Recommendation System
 
-Production-ready recommendation system for short-video reels using a **Two-Tower Retrieval model**, **FAISS ANN search**, and a **Neural Ranker**, served via **FastAPI**.
+Production-grade recommendation service for short-form reels using:
+- Two-Tower retrieval model (PyTorch)
+- FAISS ANN candidate search
+- Neural ranker re-scoring
+- FastAPI online serving
+- Dockerized deployment
 
-## Overview
-This project implements a two-stage recommendation pipeline:
-
-1. **Candidate Retrieval (Two-Tower + FAISS)**
-- Learns user and reel embeddings with a Two-Tower model (PyTorch).
-- Exports reel embeddings and serves fast nearest-neighbor retrieval with FAISS.
-
-2. **Candidate Re-Ranking (Neural Ranker)**
-- Scores retrieved candidates with a ranker MLP for better top-k ordering.
-
-3. **Online Serving (FastAPI)**
-- Startup-loaded models and FAISS index (no heavy per-request initialization).
-- Cold-start fallback for unknown users.
-- Latency logging, request-id tracing, model reload endpoint, and Prometheus metrics.
-
-## Project Structure
-
-```text
-reels-recommendation-system/
-├── app/
-│   ├── main.py             # FastAPI app, middleware, endpoints, metrics, auth
-│   ├── inference.py        # RecommendationService (load/reload/recommend)
-│   ├── models.py           # TwoTowerModel + Ranker definitions
-│   ├── faiss_index.py      # FAISS retriever wrapper
-│   ├── features.py         # User/reel aggregate feature utilities
-│   └── schemas.py          # Pydantic request/response models
-├── training/
-│   ├── dataset.py          # Data loading, temporal split, safe negative sampling
-│   ├── train_two_tower.py  # Two-tower training
-│   ├── train_ranker.py     # Ranker training
-│   ├── metrics.py          # Recall@K, NDCG@K, mean user-level metrics
-│   ├── evaluate.py         # Offline retrieval + reranker evaluation
-│   └── export_models.py    # Embedding export + id mappings
-├── data/
-│   ├── interactions.csv
-│   └── processed/
-├── tests/
-│   ├── test_inference.py
-│   └── test_api_endpoints.py
-├── docker/
-│   └── Dockerfile
-├── requirements.txt
-└── README.md
-```
-
-## What We Implemented
-
-### 1) Data pipeline improvements
-- Added strict interaction schema validation.
-- Implemented **temporal per-user train/validation split**.
-- Implemented safe negative sampling that avoids sampling positive user interactions.
-
-### 2) Training improvements
-- Refactored training scripts to use train/validation splits.
-- Added cleaner script entrypoints (`main()`) and consistent artifact paths.
-- Preserved original Two-Tower + Ranker architecture.
-
-### 3) Evaluation improvements
-- Built offline evaluation for:
-  - **Retrieval-only**
-  - **Retrieval + Ranker**
-- Computes average:
-  - **Recall@10**
-  - **NDCG@10**
-
-### 4) Inference & serving hardening
-- Added `RecommendationService` with global model/index lifecycle.
-- Ensured heavy objects are loaded once at startup (and reloadable).
-- Added cold-start fallback based on popular reels.
-- Added robust API error handling.
-- Added latency logging.
-
-### 5) API and OpenAPI
-- Implemented endpoints:
-  - `GET /`
-  - `GET /health`
-  - `GET /metrics`
-  - `GET /recommend?user_id=...&top_k=...`
-  - `POST /reload-models`
-- Added typed response schemas and detailed Swagger docs.
-
-### 6) MLOps/observability add-ons
-- Request-id propagation (`X-Request-ID`) for tracing.
-- Prometheus metrics endpoint (`/metrics`) with counters/histogram.
-- API-key protection for model reload endpoint (`X-API-Key`).
-
-### 7) Deployment readiness
-- Added production-oriented Dockerfile (Python 3.11, non-root user, uvicorn entrypoint).
-- Updated dependencies for training, serving, testing, and monitoring.
-
-## Architecture
+## System Architecture
 
 ```text
 User ID
-  -> Two-Tower user encoder
-  -> User embedding
-  -> FAISS ANN over reel embeddings (candidate retrieval)
-  -> Top-N candidate reel IDs
-  -> Neural Ranker (user emb + reel emb)
-  -> Final Top-K recommendations
+ -> Two-Tower user embedding
+ -> FAISS ANN retrieval over reel embeddings
+ -> Top-N candidates
+ -> Neural ranker scores (user_emb + reel_emb)
+ -> Top-K final recommendations
 ```
 
-## Offline Training Flow
+## Repository Layout
 
-1. Train retriever:
-```bash
-python -m training.train_two_tower
+```text
+app/
+  main.py            # API routes, middleware, observability, auth, rate limit
+  inference.py       # RecommendationService, artifact validation, cache
+  config.py          # env-driven settings (pydantic-settings)
+  logging_utils.py   # structured JSON logging formatter
+  models.py          # TwoTower + Ranker model definitions
+  faiss_index.py     # FAISS wrapper
+  schemas.py         # Pydantic API schemas
+training/
+  dataset.py         # schema checks, temporal split, safe negatives
+  train_two_tower.py
+  train_ranker.py
+  export_models.py
+  evaluate.py        # overall + segment metrics + reranker uplift
+  metrics.py
+tests/
+  test_api_endpoints.py
+  test_inference.py
+docker/
+  Dockerfile
+.github/workflows/
+  ci.yml
 ```
 
-2. Train ranker:
-```bash
-python -m training.train_ranker
-```
+## What Was Implemented
 
-3. Export embeddings and id maps:
-```bash
-python -m training.export_models
-```
+### Core ML pipeline
+- Temporal user-level train/validation split.
+- Negative sampling that avoids known positives.
+- Two-stage retrieval + rerank pipeline preserved.
+- Offline metrics for Recall@10 and NDCG@10.
+- Evaluation now reports:
+  - retrieval vs retrieval+ranker
+  - uplift
+  - user segments (`new_or_sparse`, `active`)
 
-4. Evaluate retrieval and retrieval+ranker:
-```bash
-python -m training.evaluate
-```
+### Inference hardening
+- Models and FAISS load once at startup.
+- Artifact compatibility checks before serving:
+  - required files exist
+  - embedding shape and ID mapping consistency
+- Metadata snapshot captured on reload (size + modified time).
+- In-memory TTL cache for hot recommendation calls.
+- Cold-start fallback for unknown users.
 
-## Run Locally
+### API and operations
+- Endpoints:
+  - `GET /`
+  - `GET /health`
+  - `GET /health/live`
+  - `GET /health/ready`
+  - `GET /metrics`
+  - `GET /model-metadata`
+  - `GET /recommend`
+  - `POST /reload-models`
+- Structured JSON logs with request metadata.
+- Request ID propagation via `X-Request-ID`.
+- Prometheus metrics:
+  - request count
+  - request latency histogram
+  - cold-start count
+  - rate-limit reject count
+- Reload endpoint protected with `X-API-Key` (`MODEL_ADMIN_API_KEY`).
+- Per-IP rate limiting on `/recommend`.
+- CORS configurable from environment.
 
-### Prerequisites
-- Python **3.11** recommended
-- Virtual environment
+### CI/CD and quality
+- GitHub Actions pipeline added (`.github/workflows/ci.yml`) running:
+  - `ruff check`
+  - `mypy`
+  - `pytest`
+  - API smoke checks (`/health/live`, `/health/ready`, `/recommend`)
+- Tooling config added in `pyproject.toml`.
 
-### Setup
+### Deployment
+- Dockerfile hardened with:
+  - non-root runtime user
+  - healthcheck (`/health/ready`)
+- `docker-compose.yml` added for local container orchestration.
+
+## Configuration
+
+Use environment variables (example in `.env.example`):
+- `MODEL_ADMIN_API_KEY`
+- `ENABLE_RELOAD_ENDPOINT`
+- `REQUEST_CACHE_TTL_SECONDS`
+- `REQUEST_CACHE_MAX_ITEMS`
+- `RATE_LIMIT_REQUESTS_PER_MINUTE`
+- `CORS_ALLOW_ORIGINS`
+- artifact paths (`INTERACTIONS_PATH`, `TWO_TOWER_PATH`, etc.)
+
+## Quick Start
+
+### 1) Setup
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -140,73 +123,58 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-### Start API
+### 2) Train and export artifacts
+
+```bash
+python -m training.train_two_tower
+python -m training.train_ranker
+python -m training.export_models
+python -m training.evaluate
+```
+
+### 3) Run API
+
 ```bash
 export MODEL_ADMIN_API_KEY="change-me"
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### API Docs
+### 4) Docs and checks
 - Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
 - OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+- Metrics: `http://127.0.0.1:8000/metrics`
 
-## API Usage Examples
+## API Examples
 
-### Service metadata
 ```bash
-curl http://127.0.0.1:8000/
-```
-
-### Health
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-### Recommend for known user
-```bash
+curl http://127.0.0.1:8000/health/live
+curl http://127.0.0.1:8000/health/ready
 curl "http://127.0.0.1:8000/recommend?user_id=123&top_k=10"
+curl http://127.0.0.1:8000/model-metadata
+curl -X POST http://127.0.0.1:8000/reload-models -H "X-API-Key: change-me"
 ```
 
-### Recommend for unknown user (cold start fallback)
-```bash
-curl "http://127.0.0.1:8000/recommend?user_id=999999&top_k=10"
-```
-
-### Reload models/index (secured)
-```bash
-curl -X POST http://127.0.0.1:8000/reload-models \
-  -H "X-API-Key: change-me"
-```
-
-### Prometheus metrics
-```bash
-curl http://127.0.0.1:8000/metrics
-```
-
-## Testing
+## Testing and Quality
 
 ```bash
-python -m pytest -q
+ruff check .
+mypy app training tests
+pytest -q
 ```
-
-Current tests cover:
-- inference behavior (known user + cold start)
-- endpoint behavior for all routes
-- method/validation/auth edge cases
 
 ## Docker
 
-### Build
+### Build and run
+
 ```bash
 docker build -f docker/Dockerfile -t reels-recommendation .
+docker run --rm -p 8000:8000 -e MODEL_ADMIN_API_KEY=change-me reels-recommendation
 ```
 
-### Run
+### Compose
+
 ```bash
-docker run --rm -p 8000:8000 \
-  -e MODEL_ADMIN_API_KEY=change-me \
-  reels-recommendation
+docker compose up --build
 ```
 
 ## Notes
@@ -219,6 +187,11 @@ docker run --rm -p 8000:8000 \
 - A/B testing hooks and business-rule re-ranking.
 - Vector index persistence/versioning policy.
 - CI pipeline for lint, type checks, tests, and container smoke tests.
+
+## Current Constraints
+- ANN index is in-memory and rebuilt from exported embeddings.
+- Rate limiter and cache are per-process (not shared across replicas).
+- For multi-instance production, move cache/rate-limit state to Redis.
 
 ## 👨‍💻 Author  
 

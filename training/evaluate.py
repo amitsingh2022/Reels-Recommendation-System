@@ -30,10 +30,23 @@ def _group_truth(val_df) -> Dict[int, List[int]]:
     )
 
 
+def _build_user_segments(train_df) -> Dict[str, set[int]]:
+    counts = train_df.groupby("user_id").size()
+    return {
+        "new_or_sparse": set(counts[counts <= 5].index.tolist()),
+        "active": set(counts[counts > 5].index.tolist()),
+    }
+
+
+def _subset(d: Dict[int, List[int]], users: set[int]) -> Dict[int, List[int]]:
+    return {uid: items for uid, items in d.items() if uid in users}
+
+
 def evaluate(k: int = K) -> Dict[str, Dict[str, float]]:
     full_df = load_interactions(INTERACTIONS_PATH)
-    _, val_df = split_interactions(INTERACTIONS_PATH, val_ratio=0.2)
+    train_df, val_df = split_interactions(INTERACTIONS_PATH, val_ratio=0.2)
     truth = _group_truth(val_df)
+    segments = _build_user_segments(train_df)
 
     stats = get_data_stats(full_df)
 
@@ -82,15 +95,39 @@ def evaluate(k: int = K) -> Dict[str, Dict[str, float]]:
             reel_batch_emb = two_tower.reel_encoder(reel_batch)
             rank_scores = ranker(user_batch_emb, reel_batch_emb).cpu().numpy()
 
-        # Keep retrieval score as tie-breaker for deterministic ordering.
         order = np.argsort(rank_scores + 1e-4 * retrieval_scores)[::-1]
-        reranked = [int(candidate_ids[i]) for i in order[:k]]
-        reranked_preds[user_id] = reranked
+        reranked_preds[user_id] = [int(candidate_ids[i]) for i in order[:k]]
 
     retrieval_metrics = mean_metrics_per_user(retrieval_preds, truth, k=k)
     rerank_metrics = mean_metrics_per_user(reranked_preds, truth, k=k)
 
-    results = {"retrieval": retrieval_metrics, "retrieval_plus_ranker": rerank_metrics}
+    segment_metrics: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for seg_name, users in segments.items():
+        segment_truth = _subset(truth, users)
+        segment_metrics[seg_name] = {
+            "retrieval": mean_metrics_per_user(_subset(retrieval_preds, users), segment_truth, k=k),
+            "retrieval_plus_ranker": mean_metrics_per_user(_subset(reranked_preds, users), segment_truth, k=k),
+        }
+
+    uplift = {
+        f"recall@{k}_uplift": round(
+            rerank_metrics.get(f"recall@{k}", 0.0) - retrieval_metrics.get(f"recall@{k}", 0.0),
+            6,
+        ),
+        f"ndcg@{k}_uplift": round(
+            rerank_metrics.get(f"ndcg@{k}", 0.0) - retrieval_metrics.get(f"ndcg@{k}", 0.0),
+            6,
+        ),
+    }
+
+    results = {
+        "overall": {
+            "retrieval": retrieval_metrics,
+            "retrieval_plus_ranker": rerank_metrics,
+            "uplift": uplift,
+        },
+        "segments": segment_metrics,
+    }
 
     print("Offline evaluation:")
     print(results)
